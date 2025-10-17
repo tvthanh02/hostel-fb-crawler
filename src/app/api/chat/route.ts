@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
 import { prisma } from '@/lib/db';
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 export async function POST(request: NextRequest) {
   try {
@@ -45,19 +40,49 @@ Hãy trả lời một cách thân thiện, hữu ích và chuyên nghiệp.
       { role: 'user', content: message },
     ];
 
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages,
-      temperature: 0.7,
-      max_tokens: 500,
-    });
+    // const response = await openai.chat.completions.create({
+    //   model: 'gpt-4o-mini',
+    //   messages,
+    //   temperature: 0.7,
+    //   max_tokens: 500,
+    // });
 
-    const reply = response.choices[0].message.content;
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: process.env.OPENROUTER_CHAT_MODEL,
+          messages,
+          temperature: 0.7,
+          max_tokens: 500
+        }),
+      });
 
-    return NextResponse.json({
-      message: reply,
-      conversationHistory: [...messages, { role: 'assistant', content: reply }],
-    });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`OpenRouter API error: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+
+      const responseData = await response.json();
+
+      const reply = responseData.choices[0].message.content || '';
+
+      return NextResponse.json({
+        message: reply,
+        conversationHistory: [...messages, { role: 'assistant', content: reply }],
+      });
+    } catch (error) {
+      console.error('Chat error:', error);
+      return NextResponse.json(
+        { error: 'Failed to process chat message' },
+        { status: 500 }
+      );
+    }
   } catch (error) {
     console.error('Chat error:', error);
     return NextResponse.json(
