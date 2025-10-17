@@ -104,89 +104,118 @@ export async function POST(request: NextRequest) {
     const extractionResults = await extractHostelDataBatch(uniquePosts);
 
     // Step 3: Process successful extractions and save to database
-    const saveResults = await Promise.allSettled(
-      extractionResults
-        .filter((result) => result.success && result.data)
-        .map(async (result) => {
-          try {
-            const hostelData = result.data!;
+    // Use sequential processing to avoid race conditions with upsert
+    const saveResults = [];
+    const skippedResults = [];
 
-            // Validate critical fields before saving
-            if (!hostelData.title || !hostelData.price || !result.fbPostId) {
-              throw new Error('Missing required fields for database save');
-            }
+    for (const result of extractionResults) {
+      try {
+        // Skip failed extractions
+        if (!result.success || !result.data) {
+          skippedResults.push({
+            fbPostId: result.fbPostId,
+            reason: result.error || 'Extraction failed',
+          });
+          continue;
+        }
 
-            // Optional: Get coordinates (can be skipped for performance)
-            // if (hostelData.address) {
-            //   hostelData.coordinates = await getCoordinates(hostelData.address);
-            // }
+        const hostelData = result.data;
 
-            // Find original Facebook post for raw data
-            const originalPost = uniquePosts.find(post => post.legacyId === result.fbPostId);
+        // Flexible validation - only require fbPostId and at least title OR price
+        if (!result.fbPostId) {
+          skippedResults.push({
+            fbPostId: 'unknown',
+            reason: 'Missing fbPostId',
+          });
+          continue;
+        }
 
-            // Enrich raw data with hashes for future duplicate detection
-            const enrichedRawData = originalPost
-              ? enrichRawDataWithHashes(originalPost)
-              : {};
+        // Skip if both title and price are missing (not a valid hostel post)
+        if (!hostelData.title && !hostelData.price) {
+          skippedResults.push({
+            fbPostId: result.fbPostId,
+            reason: 'Missing both title and price - likely not a hostel post',
+          });
+          continue;
+        }
 
-            // Prepare safe data for database
-            const safePostedBy = hostelData.postedBy || { name: 'Anonymous', fbId: 'unknown' };
-            const safePostedAt = hostelData.postedAt || new Date();
-            const safeFbLink = hostelData.fbLink || '';
-            const safeFbGroupName = hostelData.fbGroupName || 'Unknown Group';
+        // Check if already exists in DB (prevent duplicates from same batch)
+        const existing = await prisma.hostel.findUnique({
+          where: { id: result.fbPostId },
+          select: { id: true, title: true },
+        });
 
-            // Save to database (upsert to handle duplicates)
-            const hostel = await prisma.hostel.upsert({
-              where: { id: result.fbPostId },
-              create: {
-                id: result.fbPostId,
-                title: hostelData.title,
-                description: hostelData.description || '',
-                thumbnail: hostelData.thumbnail || '',
-                address: hostelData.address || '',
-                district: hostelData.district || '',
-                ward: hostelData.ward || null,
-                price: hostelData.price,
-                area: hostelData.area || 0,
-                postedBy: safePostedBy,
-                postedAt: safePostedAt,
-                fbLink: safeFbLink,
-                fbGroupName: safeFbGroupName,
-                coordinates: hostelData.coordinates ?? Prisma.DbNull,
-                amenities: hostelData.amenities || [],
-                rules: hostelData.rules || [],
-                images: hostelData.images || [],
-                contactPhone: hostelData.contactPhone || null,
-                depositRequired: hostelData.depositRequired || null,
-                utilities: hostelData.utilities || {},
-                roomType: hostelData.roomType || null,
-                available: true,
-                // Store enriched raw data with hashes for duplicate detection
-                rawFbData: enrichedRawData,
-              },
-              update: {
-                // Update fields that might change
-                title: hostelData.title,
-                description: hostelData.description || '',
-                price: hostelData.price,
-                available: true,
-                images: hostelData.images || [],
-                // Update raw data with latest version
-                rawFbData: enrichedRawData,
-              },
-            });
+        if (existing) {
+          console.log(`[Webhook] Skipping duplicate in batch: ${result.fbPostId}`);
+          skippedResults.push({
+            fbPostId: result.fbPostId,
+            reason: 'Already exists in database',
+          });
+          continue;
+        }
 
-            return { success: true, hostelId: hostel.id };
-          } catch (error) {
-            console.error(`Error saving hostel ${result.fbPostId}:`, error);
-            return {
-              success: false,
-              hostelId: result.fbPostId,
-              error: error instanceof Error ? error.message : 'Unknown error',
-            };
-          }
-        })
-    );
+        // Find original Facebook post for raw data
+        const originalPost = uniquePosts.find(post => post.legacyId === result.fbPostId);
+
+        // Enrich raw data with hashes for future duplicate detection
+        const enrichedRawData = originalPost
+          ? enrichRawDataWithHashes(originalPost)
+          : {};
+
+        // Prepare safe data for database with better defaults
+        const safeTitle = hostelData.title || `Phòng trọ ${hostelData.district || 'Hà Nội'}`;
+        const safePrice = hostelData.price || 0;
+        const safePostedBy = hostelData.postedBy || { name: 'Anonymous', fbId: 'unknown' };
+        const safePostedAt = hostelData.postedAt || new Date();
+        const safeFbLink = hostelData.fbLink || '';
+        const safeFbGroupName = hostelData.fbGroupName || 'Unknown Group';
+
+        // Save to database (create only - we already checked for existence)
+        const hostel = await prisma.hostel.create({
+          data: {
+            id: result.fbPostId,
+            title: safeTitle,
+            description: hostelData.description || '',
+            thumbnail: hostelData.thumbnail || '',
+            address: hostelData.address || '',
+            district: hostelData.district || '',
+            ward: hostelData.ward || null,
+            price: safePrice,
+            area: hostelData.area || 0,
+            postedBy: safePostedBy,
+            postedAt: safePostedAt,
+            fbLink: safeFbLink,
+            fbGroupName: safeFbGroupName,
+            coordinates: hostelData.coordinates ?? Prisma.DbNull,
+            amenities: hostelData.amenities || [],
+            rules: hostelData.rules || [],
+            images: hostelData.images || [],
+            contactPhone: hostelData.contactPhone || null,
+            depositRequired: hostelData.depositRequired || null,
+            utilities: hostelData.utilities || {},
+            roomType: hostelData.roomType || null,
+            available: true,
+            // Store enriched raw data with hashes for duplicate detection
+            rawFbData: enrichedRawData,
+          },
+        });
+
+        saveResults.push({
+          status: 'fulfilled' as const,
+          value: { success: true, hostelId: hostel.id }
+        });
+      } catch (error) {
+        console.error(`Error saving hostel ${result.fbPostId}:`, error);
+        saveResults.push({
+          status: 'fulfilled' as const,
+          value: {
+            success: false,
+            hostelId: result.fbPostId,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          },
+        });
+      }
+    }
 
     // Calculate statistics
     const successfulExtractions = extractionResults.filter((r) => r.success).length;
@@ -195,19 +224,20 @@ export async function POST(request: NextRequest) {
       (r) => r.status === 'fulfilled' && r.value.success
     ).length;
     const failedSaves = saveResults.filter(
-      (r) => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.success)
+      (r) => r.status === 'fulfilled' && !r.value.success
     ).length;
 
     const exactDuplicates = duplicates.filter(d => d.result.duplicateType === 'exact').length;
     const similarDuplicates = duplicates.filter(d => d.result.duplicateType === 'similar').length;
 
-    console.log(`[Webhook] Complete: ${successfulSaves}/${fbPosts.length} saved, ${duplicates.length} duplicates, ${failedExtractions + failedSaves} errors`);
+    console.log(`[Webhook] Complete: ${successfulSaves}/${fbPosts.length} saved, ${duplicates.length} duplicates, ${skippedResults.length} skipped, ${failedExtractions + failedSaves} errors`);
 
     return NextResponse.json({
       success: true,
       message: 'Batch processing complete',
       stats: {
         totalPosts: fbPosts.length,
+        validPosts: validPosts.length,
         duplicates: {
           total: duplicates.length,
           exact: exactDuplicates,
@@ -221,6 +251,7 @@ export async function POST(request: NextRequest) {
         databaseSave: {
           successful: successfulSaves,
           failed: failedSaves,
+          skipped: skippedResults.length,
         },
       },
       duplicateDetails: duplicates.map(d => ({
@@ -229,6 +260,7 @@ export async function POST(request: NextRequest) {
         reason: d.result.reason,
         existingId: d.result.existingId,
       })),
+      skippedDetails: skippedResults,
       errors: extractionResults
         .filter((r) => !r.success)
         .map((r) => ({ fbPostId: r.fbPostId, error: r.error })),
