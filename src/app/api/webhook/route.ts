@@ -3,6 +3,7 @@ import { FacebookPost } from '@/types/facebook';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { filterDuplicates, enrichRawDataWithHashes } from '@/lib/utils/duplicateDetection';
+import { Prisma } from '@prisma/client';
 
 export async function POST(request: NextRequest) {
   try {
@@ -151,7 +152,7 @@ export async function POST(request: NextRequest) {
                 postedAt: safePostedAt,
                 fbLink: safeFbLink,
                 fbGroupName: safeFbGroupName,
-                coordinates: hostelData.coordinates || null,
+                coordinates: hostelData.coordinates ?? Prisma.DbNull,
                 amenities: hostelData.amenities || [],
                 rules: hostelData.rules || [],
                 images: hostelData.images || [],
