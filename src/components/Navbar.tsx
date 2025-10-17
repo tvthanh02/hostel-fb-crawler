@@ -52,7 +52,7 @@ export default function Navbar() {
               textDecoration: 'none',
             }}
           >
-            Hostel FB Crawler
+            XuyetXinh.com
           </Typography>
 
           {/* Mobile Menu */}
