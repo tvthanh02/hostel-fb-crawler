@@ -1,0 +1,40 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql" // or "mongodb" or "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Hostel {
+  id              String    @id
+  title           String
+  description     String    @db.Text
+  thumbnail       String
+  address         String
+  district        String
+  ward            String?
+  price           Float
+  area            Float
+  postedBy        Json      // { name, avatar?, fbId }
+  postedAt        DateTime
+  fbLink          String
+  fbGroupName     String
+  coordinates     Json?     // { lat, lng }
+  amenities       String[]
+  rules           String[]
+  images          String[]
+  contactPhone    String?
+  depositRequired Float?
+  utilities       Json?     // { electricity?, water?, internet?, parking? }
+  roomType        String?   // single, shared, apartment, studio
+  available       Boolean   @default(true)
+  rawFbData       Json?     // Store original Facebook data
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([district])
+  @@index([price])
+  @@index([postedAt])
+}
