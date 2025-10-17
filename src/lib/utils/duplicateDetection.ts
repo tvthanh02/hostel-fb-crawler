@@ -114,7 +114,11 @@ export async function checkDuplicate(post: FacebookPost): Promise<DuplicateCheck
   // Check 3: Similarity hash (similar hostel, different post)
   // This is more lenient - same phone/address but different post
   const similarityHash = generateSimilarityHash(post);
-  if (post.contactPhone || similarityHash !== crypto.createHash('md5').update('||').digest('hex')) {
+  // Only perform this check if we detect a phone or address in text
+  const textLower = post.text?.toLowerCase() || '';
+  const hasPhone = /\d{10,11}/.test(textLower);
+  const hasAddress = !!(textLower.match(/\d+\s+[^\n,]+/));
+  if (hasPhone || hasAddress) {
     const existingBySimilarity = await prisma.hostel.findFirst({
       where: {
         rawFbData: {
@@ -187,7 +191,7 @@ export async function filterDuplicates(
 /**
  * Add hashes to hostel raw data for future duplicate detection
  */
-export function enrichRawDataWithHashes(post: FacebookPost): any {
+export function enrichRawDataWithHashes(post: FacebookPost): FacebookPost & { contentHash: string; similarityHash: string } {
   return {
     ...post,
     contentHash: generateContentHash(post),

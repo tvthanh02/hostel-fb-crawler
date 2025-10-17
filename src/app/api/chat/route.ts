@@ -5,6 +5,11 @@ export async function POST(request: NextRequest) {
   try {
     const { message, conversationHistory } = await request.json();
 
+    type ChatMessage = {
+      role: 'system' | 'user' | 'assistant';
+      content: string;
+    };
+
     // Get some recent hostels for context
     const recentHostels = await prisma.hostel.findMany({
       take: 10,
@@ -34,10 +39,14 @@ ${JSON.stringify(recentHostels, null, 2)}
 Hãy trả lời một cách thân thiện, hữu ích và chuyên nghiệp.
 `;
 
-    const messages: any[] = [
+    const history: ChatMessage[] = Array.isArray(conversationHistory)
+      ? (conversationHistory as ChatMessage[])
+      : [];
+
+    const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
-      ...(conversationHistory || []),
-      { role: 'user', content: message },
+      ...history,
+      { role: 'user', content: String(message ?? '') },
     ];
 
     // const response = await openai.chat.completions.create({
